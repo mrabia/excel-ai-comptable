@@ -403,6 +403,30 @@ class AccountantAgent:
             verbose=True
         )
     
+    def _run_async_safely(self, coro):
+        """Safely run async coroutines from sync context"""
+        try:
+            # Try to get current loop
+            loop = asyncio.get_running_loop()
+            # If we're in an async context, use a thread pool
+            import concurrent.futures
+            import threading
+            
+            def run_in_thread():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(coro)
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            # No running loop, safe to run directly
+            return asyncio.run(coro)
+    
     def _create_tools(self) -> List[StructuredTool]:
         """Create LangChain tools for the agent"""
         
@@ -414,10 +438,8 @@ class AccountantAgent:
                 if not file_record:
                     return f"File with ID {file_id} not found"
                 
-                # Use synchronous MCP client call
-                import asyncio
-                loop = asyncio.get_event_loop()
-                structure = loop.run_until_complete(self.mcp_client.analyze_structure(file_record.file_path))
+                # Use safe async handling
+                structure = self._run_async_safely(self.mcp_client.analyze_structure(file_record.file_path))
                 return json.dumps(structure, indent=2)
             except Exception as e:
                 return f"Error analyzing file: {str(e)}"
@@ -432,10 +454,8 @@ class AccountantAgent:
                 if not file_record:
                     return f"File with ID {file_id} not found"
                 
-                # Use synchronous MCP client call
-                import asyncio
-                loop = asyncio.get_event_loop()
-                sheets = loop.run_until_complete(self.mcp_client.read_excel(file_record.file_path))
+                # Use safe async handling
+                sheets = self._run_async_safely(self.mcp_client.read_excel(file_record.file_path))
                 config_dict = json.loads(ratio_config)
                 
                 results = {}
@@ -459,11 +479,9 @@ class AccountantAgent:
                 if not budget_file or not actual_file:
                     return "One or both files not found"
                 
-                # Use synchronous MCP client calls
-                import asyncio
-                loop = asyncio.get_event_loop()
-                budget_sheets = loop.run_until_complete(self.mcp_client.read_excel(budget_file.file_path))
-                actual_sheets = loop.run_until_complete(self.mcp_client.read_excel(actual_file.file_path))
+                # Use safe async handling
+                budget_sheets = self._run_async_safely(self.mcp_client.read_excel(budget_file.file_path))
+                actual_sheets = self._run_async_safely(self.mcp_client.read_excel(actual_file.file_path))
                 
                 # Assume first sheet for simplicity
                 budget_df = list(budget_sheets.values())[0]
@@ -487,10 +505,8 @@ class AccountantAgent:
         def search_documents(query: str) -> str:
             """Search through uploaded documents using RAG"""
             try:
-                # Use synchronous RAG search
-                import asyncio
-                loop = asyncio.get_event_loop()
-                results = loop.run_until_complete(self.rag_system.search(query))
+                # Use safe async handling
+                results = self._run_async_safely(self.rag_system.search(query))
                 return json.dumps(results, indent=2)
             except Exception as e:
                 return f"Error searching documents: {str(e)}"
@@ -693,10 +709,8 @@ async def upload_file(file: UploadFile = File(...)):
             
             # Add to RAG system
             if file_extension in ['.xlsx', '.xls']:
-                # Use synchronous MCP client call
-                import asyncio
-                loop = asyncio.get_event_loop()
-                sheets = loop.run_until_complete(agent.mcp_client.read_excel(str(file_path)))
+                # Use safe async handling
+                sheets = agent._run_async_safely(agent.mcp_client.read_excel(str(file_path)))
                 for sheet_name, df in sheets.items():
                     content = f"File: {file.filename}, Sheet: {sheet_name}\n"
                     content += f"Columns: {', '.join(df.columns)}\n"
