@@ -176,7 +176,7 @@ class AgenticExcelAnalyzer:
     def __init__(self):
         # Initialize LLM
         self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             temperature=0.1,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
@@ -203,16 +203,16 @@ class AgenticExcelAnalyzer:
         
     def _create_data_analyst_agent(self):
         """Create specialized data analysis agent"""
-        system_prompt = """You are a Data Analysis Agent specialized in Excel file processing.
+        system_prompt = """Vous êtes un Agent d'Analyse de Données spécialisé dans le traitement des fichiers Excel.
         
-        Your responsibilities:
-        1. Load and examine Excel file structure
-        2. Analyze data quality and completeness
-        3. Identify patterns and anomalies in data
-        4. Provide data summary and insights
+        Vos responsabilités:
+        1. Charger et examiner la structure des fichiers Excel
+        2. Analyser la qualité et la complétude des données
+        3. Identifier les modèles et anomalies dans les données
+        4. Fournir un résumé et des insights sur les données
         
-        Always use the available tools to analyze data thoroughly.
-        Focus on data structure, quality, and initial insights."""
+        IMPORTANT: Répondez TOUJOURS en français. Utilisez toujours les outils disponibles pour analyser les données minutieusement.
+        Concentrez-vous sur la structure des données, la qualité, et les insights initiaux."""
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -223,16 +223,16 @@ class AgenticExcelAnalyzer:
     
     def _create_financial_analyst_agent(self):
         """Create specialized financial analysis agent"""
-        system_prompt = """You are a Financial Analysis Agent specialized in accounting and financial analysis.
+        system_prompt = """Vous êtes un Agent d'Analyse Financière spécialisé en comptabilité et analyse financière.
         
-        Your responsibilities:
-        1. Calculate financial ratios and metrics
-        2. Perform variance analysis between budget and actual
-        3. Analyze profitability, liquidity, and efficiency
-        4. Provide financial insights and recommendations
+        Vos responsabilités:
+        1. Calculer les ratios et métriques financières
+        2. Effectuer l'analyse des écarts entre budget et réalisé
+        3. Analyser la rentabilité, liquidité, et efficacité
+        4. Fournir des insights financiers et recommandations
         
-        Use the financial analysis tools to provide comprehensive financial insights.
-        Focus on financial health, performance trends, and actionable recommendations."""
+        IMPORTANT: Répondez TOUJOURS en français. Utilisez les outils d'analyse financière pour fournir des insights financiers complets.
+        Concentrez-vous sur la santé financière, les tendances de performance, et les recommandations actionnables."""
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt), 

@@ -557,8 +557,8 @@
             <div class="upload-section">
                 <div class="upload-area" id="uploadArea">
                     <div class="upload-icon">📁</div>
-                    <div class="upload-text">Drop Excel files here</div>
-                    <div class="upload-subtext">or click to browse</div>
+                    <div class="upload-text" id="uploadText">Drop Excel files here</div>
+                    <div class="upload-subtext" id="uploadSubtext">or click to browse</div>
                     <input type="file" id="fileInput" class="file-input" multiple accept=".xlsx,.xls,.csv">
                 </div>
             </div>
@@ -566,7 +566,7 @@
             <div class="files-list">
                 <div class="files-header">
                     <span>📋</span>
-                    Uploaded Files (<span id="fileCount">0</span>)
+                    <span id="filesHeader">Uploaded Files</span> (<span id="fileCount">0</span>)
                 </div>
                 <div id="filesList"></div>
             </div>
@@ -593,7 +593,7 @@
                         <div class="empty-icon">🤖</div>
                         <div class="empty-title">Welcome to Accountant AI</div>
                         <div class="empty-text">
-                            Upload your Excel files and start asking questions about your financial data. 
+                            <span id="emptyStateText">Upload your Excel files and start asking questions about your financial data.</span> 
                             I can help with analysis, calculations, comparisons, and generating insights.
                         </div>
                     </div>
@@ -712,7 +712,7 @@
 
             connectWebSocket() {
                 try {
-                    this.ws = new WebSocket('ws://localhost:8000/ws/chat');
+                    this.ws = new WebSocket('ws://localhost:8002/ws/chat');
                     
                     this.ws.onopen = () => {
                         this.isConnected = true;
@@ -799,12 +799,12 @@
                     if (response.ok) {
                         const result = await response.json();
                         this.addFileToList(file, result.file_id);
-                        this.updateStatus('File uploaded successfully', true);
+                        this.updateStatus(window.uiTexts?.upload?.uploadSuccess || 'File uploaded successfully', true);
                     } else {
                         throw new Error('Upload failed');
                     }
                 } catch (error) {
-                    this.updateStatus('Upload failed', false);
+                    this.updateStatus(window.uiTexts?.upload?.uploadError || 'Upload failed', false);
                 }
             }
 
@@ -944,9 +944,57 @@
         // Initialize the application
         const app = new AccountantAI();
 
-        // Add some sample messages for demo
-        setTimeout(() => {
-            app.addMessage("Hello! I'm your AI accounting assistant. Upload some Excel files and I'll help you analyze your financial data.", 'ai');
+        // Load all UI texts dynamically
+        async function loadUITexts() {
+            try {
+                const response = await fetch('/api/ui-texts');
+                const texts = await response.json();
+                
+                // Update upload section
+                if (document.getElementById('uploadText')) {
+                    document.getElementById('uploadText').textContent = texts.upload.dropText;
+                }
+                if (document.getElementById('uploadSubtext')) {
+                    document.getElementById('uploadSubtext').textContent = texts.upload.browseText;
+                }
+                if (document.getElementById('filesHeader')) {
+                    document.getElementById('filesHeader').textContent = texts.upload.filesHeader;
+                }
+                if (document.getElementById('emptyStateText')) {
+                    document.getElementById('emptyStateText').textContent = texts.chat.emptyState;
+                }
+                
+                // Update chat placeholder
+                const messageInput = document.getElementById('messageInput');
+                if (messageInput) {
+                    messageInput.placeholder = texts.chat.placeholder;
+                }
+                
+                // Store texts globally for use in JavaScript functions
+                window.uiTexts = texts;
+                
+            } catch (error) {
+                console.error('Error loading UI texts:', error);
+            }
+        }
+
+        // Load welcome message dynamically from API
+        async function loadWelcomeMessage() {
+            try {
+                const response = await fetch('/api/welcome-message');
+                const data = await response.json();
+                app.addMessage(data.message, 'ai');
+            } catch (error) {
+                console.error('Error loading welcome message:', error);
+                // Fallback message in French if API fails
+                app.addMessage("Bonjour ! Je suis votre assistant comptable IA.", 'ai');
+            }
+        }
+
+        // Initialize everything
+        setTimeout(async () => {
+            await loadUITexts();
+            await loadWelcomeMessage();
         }, 1000);
     </script>
 </body>

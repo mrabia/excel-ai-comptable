@@ -54,7 +54,7 @@ from sqlalchemy.orm import sessionmaker
 @dataclass
 class Config:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    MODEL_NAME: str = "gpt-4-turbo-preview"
+    MODEL_NAME: str = "gpt-4-turbo"
     TEMPERATURE: float = 0.1
     MAX_TOKENS: int = 2000
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
@@ -344,11 +344,12 @@ class AccountantAgent:
     
     def __init__(self):
         self.llm = ChatOpenAI(
-            model_name=config.MODEL_NAME,
+            model=config.MODEL_NAME,
             temperature=config.TEMPERATURE,
             max_tokens=config.MAX_TOKENS,
             openai_api_key=config.OPENAI_API_KEY
         )
+        logger.info(f"AccountantAgent initialized with model: {config.MODEL_NAME}")
         self.memory = ConversationBufferWindowMemory(
             memory_key="chat_history",
             return_messages=True,
@@ -369,17 +370,19 @@ class AccountantAgent:
         
         tools = self._create_tools()
         
-        system_message = """You are an expert AI accounting assistant with access to Excel analysis tools.
-        You can:
-        1. Analyze multiple Excel spreadsheets simultaneously
-        2. Perform financial ratio calculations
-        3. Conduct variance analysis between budget and actual
-        4. Cross-reference data across different workbooks
-        5. Generate audit trails and compliance reports
-        6. Consolidate financial statements
+        system_message = """Vous êtes un assistant expert en comptabilité et analyse financière avec accès aux outils d'analyse Excel.
+        Vous pouvez:
+        1. Analyser plusieurs feuilles de calcul Excel simultanément
+        2. Effectuer des calculs de ratios financiers
+        3. Réaliser des analyses d'écart entre budget et réalisé
+        4. Croiser des données entre différents classeurs
+        5. Générer des pistes d'audit et rapports de conformité
+        6. Consolider les états financiers
         
-        Always provide clear, actionable insights and explain your analysis methodology.
-        When working with financial data, be precise and highlight any assumptions made.
+        IMPORTANT: Répondez TOUJOURS en français. Fournissez des insights clairs et actionnables en expliquant votre méthodologie d'analyse.
+        Quand vous travaillez avec des données financières, soyez précis et mettez en évidence toutes les hypothèses formulées.
+        
+        Contexte français: Vous assistez des utilisateurs francophones avec leurs déclarations TVA, analyses financières, et gestion comptable.
         """
         
         # Create agent with tools - fix LangChain compatibility
@@ -403,7 +406,7 @@ class AccountantAgent:
     def _create_tools(self) -> List[StructuredTool]:
         """Create LangChain tools for the agent"""
         
-        async def analyze_excel_file(file_id: str) -> str:
+        def analyze_excel_file(file_id: str) -> str:
             """Analyze an uploaded Excel file"""
             try:
                 db = SessionLocal()
@@ -411,14 +414,17 @@ class AccountantAgent:
                 if not file_record:
                     return f"File with ID {file_id} not found"
                 
-                structure = await self.mcp_client.analyze_structure(file_record.file_path)
+                # Use synchronous MCP client call
+                import asyncio
+                loop = asyncio.get_event_loop()
+                structure = loop.run_until_complete(self.mcp_client.analyze_structure(file_record.file_path))
                 return json.dumps(structure, indent=2)
             except Exception as e:
                 return f"Error analyzing file: {str(e)}"
             finally:
                 db.close()
         
-        async def calculate_ratios(file_id: str, ratio_config: str) -> str:
+        def calculate_ratios(file_id: str, ratio_config: str) -> str:
             """Calculate financial ratios from Excel data"""
             try:
                 db = SessionLocal()
@@ -426,7 +432,10 @@ class AccountantAgent:
                 if not file_record:
                     return f"File with ID {file_id} not found"
                 
-                sheets = await self.mcp_client.read_excel(file_record.file_path)
+                # Use synchronous MCP client call
+                import asyncio
+                loop = asyncio.get_event_loop()
+                sheets = loop.run_until_complete(self.mcp_client.read_excel(file_record.file_path))
                 config_dict = json.loads(ratio_config)
                 
                 results = {}
@@ -440,7 +449,7 @@ class AccountantAgent:
             finally:
                 db.close()
         
-        async def perform_variance_analysis(budget_file_id: str, actual_file_id: str) -> str:
+        def perform_variance_analysis(budget_file_id: str, actual_file_id: str) -> str:
             """Perform variance analysis between budget and actual files"""
             try:
                 db = SessionLocal()
@@ -450,8 +459,11 @@ class AccountantAgent:
                 if not budget_file or not actual_file:
                     return "One or both files not found"
                 
-                budget_sheets = await self.mcp_client.read_excel(budget_file.file_path)
-                actual_sheets = await self.mcp_client.read_excel(actual_file.file_path)
+                # Use synchronous MCP client calls
+                import asyncio
+                loop = asyncio.get_event_loop()
+                budget_sheets = loop.run_until_complete(self.mcp_client.read_excel(budget_file.file_path))
+                actual_sheets = loop.run_until_complete(self.mcp_client.read_excel(actual_file.file_path))
                 
                 # Assume first sheet for simplicity
                 budget_df = list(budget_sheets.values())[0]
@@ -472,10 +484,13 @@ class AccountantAgent:
             finally:
                 db.close()
         
-        async def search_documents(query: str) -> str:
+        def search_documents(query: str) -> str:
             """Search through uploaded documents using RAG"""
             try:
-                results = await self.rag_system.search(query)
+                # Use synchronous RAG search
+                import asyncio
+                loop = asyncio.get_event_loop()
+                results = loop.run_until_complete(self.rag_system.search(query))
                 return json.dumps(results, indent=2)
             except Exception as e:
                 return f"Error searching documents: {str(e)}"
@@ -678,7 +693,10 @@ async def upload_file(file: UploadFile = File(...)):
             
             # Add to RAG system
             if file_extension in ['.xlsx', '.xls']:
-                sheets = await agent.mcp_client.read_excel(str(file_path))
+                # Use synchronous MCP client call
+                import asyncio
+                loop = asyncio.get_event_loop()
+                sheets = loop.run_until_complete(agent.mcp_client.read_excel(str(file_path)))
                 for sheet_name, df in sheets.items():
                     content = f"File: {file.filename}, Sheet: {sheet_name}\n"
                     content += f"Columns: {', '.join(df.columns)}\n"
@@ -777,6 +795,52 @@ async def list_files():
 async def upload_files_endpoint(file: UploadFile = File(...)):
     """Alternative upload endpoint for frontend compatibility"""
     return await upload_file(file)
+
+@api_router.get("/welcome-message")
+async def get_welcome_message():
+    """Get the dynamic welcome message in French"""
+    return {
+        "message": "Bonjour ! Je suis votre assistant comptable IA. Téléchargez vos fichiers Excel et je vous aiderai à analyser vos données financières avec des insights professionnels.",
+        "timestamp": datetime.utcnow().isoformat(),
+        "language": "fr"
+    }
+
+@api_router.get("/ui-texts")
+async def get_ui_texts():
+    """Get all dynamic UI texts in French"""
+    return {
+        "upload": {
+            "dropText": "Déposez vos fichiers Excel ici",
+            "browseText": "ou cliquez pour parcourir",
+            "filesHeader": "Fichiers Téléchargés",
+            "uploadSuccess": "Fichier téléchargé avec succès",
+            "uploadError": "Échec du téléchargement",
+            "invalidFile": "Type de fichier non valide",
+            "dragOver": "Relâchez pour télécharger"
+        },
+        "chat": {
+            "placeholder": "Posez une question sur vos données financières...",
+            "sendButton": "Envoyer",
+            "connecting": "Connexion...",
+            "connected": "Connecté",
+            "disconnected": "Déconnecté",
+            "connectionError": "Erreur de connexion",
+            "emptyState": "Téléchargez vos fichiers Excel et commencez à poser des questions sur vos données financières."
+        },
+        "modes": {
+            "chat": "Chat",
+            "analysis": "Analyse",
+            "reports": "Rapports"
+        },
+        "general": {
+            "loading": "Chargement...",
+            "error": "Erreur",
+            "success": "Succès",
+            "remove": "Supprimer"
+        },
+        "language": "fr",
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 @api_router.post("/agent/suggestions")
 async def get_agent_suggestions(request: dict):
