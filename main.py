@@ -14,15 +14,27 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# JSON serialization helper for datetime objects
+# JSON serialization helper for datetime objects and pandas types
 def json_serializer(obj):
     """JSON serializer for objects not serializable by default json code"""
     if isinstance(obj, datetime):
         return obj.isoformat()
     elif hasattr(obj, 'isoformat'):  # Handle other date/time objects
         return obj.isoformat()
+    elif hasattr(obj, 'dtype'):  # Handle pandas/numpy data types
+        return str(obj)
+    elif hasattr(obj, 'item'):  # Handle numpy scalars
+        return obj.item()
     elif hasattr(obj, '__dict__'):  # Handle SQLAlchemy objects
         return {key: value for key, value in obj.__dict__.items() if not key.startswith('_')}
+    # Handle numpy types specifically
+    import numpy as np
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.dtype):
+        return str(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 # Load environment variables
@@ -136,8 +148,14 @@ class MCPExcelClient:
         try:
             excel_file = pd.ExcelFile(file_path)
             sheets = {}
+            
+            logger.info(f"Reading Excel file with {len(excel_file.sheet_names)} sheets: {excel_file.sheet_names}")
+            
             for sheet_name in excel_file.sheet_names:
-                sheets[sheet_name] = pd.read_excel(file_path, sheet_name=sheet_name)
+                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                sheets[sheet_name] = df
+                logger.info(f"Sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
+                
             return sheets
         except Exception as e:
             logger.error(f"Error reading Excel file {file_path}: {e}")
@@ -150,13 +168,34 @@ class MCPExcelClient:
             structure = {}
             
             for sheet_name, df in sheets.items():
+                # Convert data types safely to strings
+                data_types = {col: str(dtype) for col, dtype in df.dtypes.items()}
+                
+                # Convert sample data safely
+                sample_data = {}
+                for col in df.columns:
+                    sample_data[col] = []
+                    for i in range(min(3, len(df))):
+                        val = df.iloc[i][col]
+                        if pd.isna(val):
+                            sample_data[col].append(None)
+                        elif hasattr(val, 'item'):  # numpy types
+                            sample_data[col].append(val.item())
+                        elif isinstance(val, (np.integer, np.floating)):
+                            sample_data[col].append(float(val))
+                        else:
+                            sample_data[col].append(str(val))
+                
+                # Convert null counts safely
+                null_counts = {col: int(count) for col, count in df.isnull().sum().items()}
+                
                 structure[sheet_name] = {
                     "rows": len(df),
                     "columns": len(df.columns),
                     "column_names": df.columns.tolist(),
-                    "data_types": df.dtypes.to_dict(),
-                    "sample_data": df.head(3).to_dict(),
-                    "null_counts": df.isnull().sum().to_dict()
+                    "data_types": data_types,
+                    "sample_data": sample_data,
+                    "null_counts": null_counts
                 }
             
             return structure
@@ -292,7 +331,7 @@ class RAGSystem:
             vector_db_path.mkdir(exist_ok=True)
             
             if (vector_db_path / "index.faiss").exists():
-                self.vector_store = FAISS.load_local(str(vector_db_path), self.embeddings)
+                self.vector_store = FAISS.load_local(str(vector_db_path), self.embeddings, allow_dangerous_deserialization=True)
                 logger.info("Loaded existing vector store")
             else:
                 # Create empty vector store
@@ -370,19 +409,44 @@ class AccountantAgent:
         
         tools = self._create_tools()
         
-        system_message = """Vous êtes un assistant expert en comptabilité et analyse financière avec accès aux outils d'analyse Excel.
-        Vous pouvez:
-        1. Analyser plusieurs feuilles de calcul Excel simultanément
-        2. Effectuer des calculs de ratios financiers
-        3. Réaliser des analyses d'écart entre budget et réalisé
-        4. Croiser des données entre différents classeurs
-        5. Générer des pistes d'audit et rapports de conformité
-        6. Consolider les états financiers
-        
-        IMPORTANT: Répondez TOUJOURS en français. Fournissez des insights clairs et actionnables en expliquant votre méthodologie d'analyse.
-        Quand vous travaillez avec des données financières, soyez précis et mettez en évidence toutes les hypothèses formulées.
-        
-        Contexte français: Vous assistez des utilisateurs francophones avec leurs déclarations TVA, analyses financières, et gestion comptable.
+        system_message = """Vous êtes un assistant expert en comptabilité et fiscalité marocaine.
+Votre mission : produire une déclaration de TVA collectée fiable à partir des données fournies par l'utilisateur
+(fichiers Excel/CSV et/ou instructions dans le chat).
+
+### 🔧 OUTILS DISPONIBLES
+Vous avez accès à l'outil 'calculate_tva_collectee' qui calcule automatiquement la TVA collectée.
+UTILISEZ OBLIGATOIREMENT cet outil quand l'utilisateur demande des calculs de TVA.
+Paramètres requis: file_id, start_date (YYYY-MM-DD), end_date (YYYY-MM-DD)
+
+### 📌 Rôle et responsabilités
+- Agir comme un expert-comptable marocain spécialisé en TVA.
+- UTILISER l'outil calculate_tva_collectee pour tous les calculs TVA.
+- Garantir que le calcul de la TVA est basé sur les écritures comptables réelles (comptes 445).
+- Fournir un rapport clair et actionnable, en français, avec des MONTANTS CONCRETS.
+
+### 📋 Méthodologie TVA
+1. TOUJOURS utiliser l'outil calculate_tva_collectee pour les calculs.
+2. Rechercher les comptes **445…** dans le grand livre pour la période spécifiée.
+3. Calculer la TVA collectée = **Somme des Crédits – Somme des Débits** sur les comptes 445.
+4. Ne JAMAIS recalculer la TVA à partir du HT × taux, sauf si l'utilisateur demande un comparatif de contrôle.
+5. TOUJOURS fournir des montants concrets en MAD, jamais de réponses vagues.
+
+### ✅ Résultat attendu
+📋 Déclaration TVA Collectée – [Période]
+
+RÉSUMÉ GLOBAL :
+• Période analysée : [dates précises]
+• TVA collectée (comptable, comptes 445) : X MAD (MONTANT CONCRET OBLIGATOIRE)
+• Méthode : Σ(Crédits 445) – Σ(Débits 445)
+• Base : [nom du fichier/feuille analysée]
+
+### ⚖️ Règles strictes
+- TOUJOURS utiliser l'outil calculate_tva_collectee pour les calculs TVA.
+- TVA officielle = montants des comptes 445 uniquement.
+- JAMAIS de réponses sans montants concrets.
+- Si l'outil ne fonctionne pas, expliquer le problème technique précis.
+
+IMPORTANT: Répondez TOUJOURS en français avec des MONTANTS CONCRETS en MAD.
         """
         
         # Create agent with tools - fix LangChain compatibility
@@ -396,11 +460,17 @@ class AccountantAgent:
             MessagesPlaceholder(variable_name="agent_scratchpad")
         ])
         
+        # Log tools for debugging
+        tool_names = [tool.name for tool in tools]
+        logger.info(f"Agent initialized with tools: {tool_names}")
+        
         self.agent_executor = AgentExecutor.from_agent_and_tools(
             agent=create_openai_tools_agent(self.llm, tools, prompt),
             tools=tools,
             memory=self.memory,
-            verbose=True
+            verbose=True,
+            max_iterations=3,
+            early_stopping_method="generate"
         )
     
     def _run_async_safely(self, coro):
@@ -440,7 +510,9 @@ class AccountantAgent:
                 
                 # Use safe async handling
                 structure = self._run_async_safely(self.mcp_client.analyze_structure(file_record.file_path))
-                return json.dumps(structure, indent=2)
+                
+                # Use the safe JSON serializer to handle pandas/numpy types
+                return json.dumps(structure, indent=2, default=json_serializer)
             except Exception as e:
                 return f"Error analyzing file: {str(e)}"
             finally:
@@ -511,6 +583,39 @@ class AccountantAgent:
             except Exception as e:
                 return f"Error searching documents: {str(e)}"
         
+        def calculate_tva_collectee_expert(file_id: str, start_date: str, end_date: str) -> str:
+            """EXPERT TVA Calculator using proven methodology - Version intégrée agent"""
+            try:
+                # Import du module expert
+                from expert_tva_calculator_tool import calculate_tva_collectee_expert_tool
+                import pandas as pd
+                
+                db = SessionLocal()
+                file_record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+                if not file_record:
+                    return f"❌ Fichier avec ID {file_id} introuvable"
+                
+                logger.info(f"🔍 Lecture du fichier Excel: {file_record.filename}")
+                
+                # Lire toutes les feuilles Excel avec le MCP client
+                sheets = self._run_async_safely(self.mcp_client.read_excel(file_record.file_path))
+                
+                logger.info(f"📊 Feuilles trouvées: {list(sheets.keys())}")
+                
+                # Utiliser le calculateur expert qui fonctionne
+                result = calculate_tva_collectee_expert_tool(sheets, start_date, end_date)
+                
+                logger.info("✅ Calcul TVA expert terminé avec succès")
+                
+                return result
+                
+            except Exception as e:
+                import traceback
+                logger.error(f"❌ Erreur calculateur expert TVA: {str(e)}")
+                return f"❌ Erreur lors du calcul TVA expert: {str(e)}\n{traceback.format_exc()}"
+            finally:
+                db.close()
+        
         tools = [
             StructuredTool.from_function(
                 func=analyze_excel_file,
@@ -531,6 +636,11 @@ class AccountantAgent:
                 func=search_documents,
                 name="search_documents",
                 description="Search through uploaded documents for relevant information"
+            ),
+            StructuredTool.from_function(
+                func=calculate_tva_collectee_expert,
+                name="calculate_tva_collectee",
+                description="EXPERT TVA Calculator - Calculate TVA collectée from Excel file using proven Moroccan methodology (compte 445). Requires file_id, start_date (YYYY-MM-DD), and end_date (YYYY-MM-DD). Returns concrete amounts in MAD with detailed breakdown."
             )
         ]
         
